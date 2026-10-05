@@ -145,13 +145,22 @@ class Evolution {
         // clover //////////////////////////////////////////////////////////////////////
         void siteClover(ComplexField &Clov, const GaugeField &U)
         {
-            GaugeLinkField scaledUnit(U.Grid());
-            Clov = Zero();
+            GridBase *grid = U.Grid();
+            std::array<GaugeLinkField, Nd> Udir = {
+                GaugeLinkField(grid),
+                GaugeLinkField(grid),
+                GaugeLinkField(grid),
+                GaugeLinkField(grid)
+            };
+            for (int d = 0; d < Nd; d++) {
+                Udir[d] = PeekIndex<LorentzIndex>(U, d);
+            }
+            GaugeLinkField scaledUnit(grid);
             scaledUnit = 1.0/Nc;
+            Clov = Zero();
             for (int mu = 1; mu < Nd; mu++) {
                 for (int nu = 0; nu < mu; nu++) {
-                    linkBuf_ = PeekIndex<LorentzIndex>(U, mu);
-                    WilsonLoops<GImpl>::FieldStrength(linkBuf_, U, mu, nu);
+                    WilsonLoops<GImpl>::FieldStrength(linkBuf_, U, Udir[mu], Udir[nu], mu, nu);
                     linkBuf_ -= trace(linkBuf_) * scaledUnit;
                     Clov -= trace(linkBuf_ * linkBuf_);
                 }
