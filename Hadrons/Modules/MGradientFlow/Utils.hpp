@@ -69,6 +69,10 @@ public:
         return SG.S(U);
     };
 
+    virtual double S(const GaugeField &U, const std::vector<GaugeLinkField> &Udir) {
+        return SG.S(U, Udir);
+    };
+
     virtual std::string LogParameters(){
         std::stringstream sstream;
         sstream << GridLogMessage << "["<<action_name() <<"] beta: " << beta << std::endl;
@@ -143,35 +147,26 @@ class Evolution {
         {};
 
         // clover //////////////////////////////////////////////////////////////////////
-        void siteClover(ComplexField &Clov, const GaugeField &U)
+        void siteClover(ComplexField &Clov, const std::vector<GaugeLinkField> &Fmunu)
         {
-            GridBase *grid = U.Grid();
-            std::array<GaugeLinkField, Nd> Udir = {
-                GaugeLinkField(grid),
-                GaugeLinkField(grid),
-                GaugeLinkField(grid),
-                GaugeLinkField(grid)
-            };
-            for (int d = 0; d < Nd; d++) {
-                Udir[d] = PeekIndex<LorentzIndex>(U, d);
-            }
+            GridBase *grid = Clov.Grid();
             GaugeLinkField scaledUnit(grid);
-            scaledUnit = 1.0/Nc;
+            scaledUnit = 1.0 / Nc;
             Clov = Zero();
-            for (int mu = 1; mu < Nd; mu++) {
-                for (int nu = 0; nu < mu; nu++) {
-                    WilsonLoops<GImpl>::FieldStrength(linkBuf_, U, Udir[mu], Udir[nu], mu, nu);
-                    linkBuf_ -= trace(linkBuf_) * scaledUnit;
-                    Clov -= trace(linkBuf_ * linkBuf_);
-                }
+
+            const int cloverIndex[6] = {6, 1, 7, 3, 4, 5}; // {Fyx, Fzx, Fzy, , Ftx, Fty, Ftz}
+            for (int k = 0; k < 6; k++) {
+                linkBuf_ = Fmunu[cloverIndex[k]];
+                linkBuf_ -= trace(linkBuf_) * scaledUnit;
+                Clov -= trace(linkBuf_ * linkBuf_);
             }
         }
 
-        double avgClover(const GaugeField &Umu) 
+        double avgClover(const GaugeField &Umu, const std::vector<GaugeLinkField> &Fmunu)
         {
             ComplexField Clov(Umu.Grid());
 
-            siteClover(Clov, Umu);
+            siteClover(Clov, Fmunu);
             auto Tc = sum(Clov);
             auto c = TensorRemove(Tc);
 
@@ -180,23 +175,27 @@ class Evolution {
             return c.real() / vol;
         }
 
-        // polyakov loop in mu direction  //////////////////////////////////////////////
-        ComplexD avgPolyakovLoopMu(const GaugeField &Umu, int mu) { // assuming Nd=4
-            GaugeLinkField P(Umu.Grid());
-            ComplexD out;
+        // Polyakov loops in all directions using pre-extracted directional links.
+        std::array<ComplexD, Nd> avgPolyakovLoopMu(const std::vector<GaugeLinkField> &Udir) {
+            std::array<ComplexD, Nd> out;
 
-            double vol = Umu.Grid()->gSites();
+            double vol = Udir[0].Grid()->gSites();
+            RealD norm = 1.0 / (Nc * vol);
 
-            linkBuf_ = peekLorentz(Umu,mu);
-            P = linkBuf_;
-            for (int t=1; t < Umu.Grid()->GlobalDimensions()[mu]; t++) {
-                P = GImpl::CovShiftForward(linkBuf_,mu,P);
+            for (int mu = 0; mu < Nd; mu++)
+            {
+                GaugeLinkField P(Udir[mu].Grid());
+
+                P = Udir[mu];
+
+                for (int t = 1; t < Udir[mu].Grid()->GlobalDimensions()[mu]; t++)
+                {
+                    P = GImpl::CovShiftForward(Udir[mu], mu, P);
+                }
+                out[mu] = sum(trace(P)) * norm;
             }
-            RealD norm = 1.0/(Nc*vol);
-            out = sum(trace(P))*norm;
             return out;
         }
-
 
         void gauge_RK(GaugeField &U) {
             Wi_[0] = U;                                     // W0
@@ -332,15 +331,22 @@ class Evolution {
         // gauge field status //////////////////////////////////////////////////////////
         void gauge_status(GaugeField &Umu, GaugeResult &result, double flowt)
         {
-            double Q = WilsonLoops<GImpl>::TopologicalCharge(Umu);
-            double plaq = WilsonLoops<GImpl>::avgPlaquette(Umu);
-            double rect = WilsonLoops<GImpl>::avgRectangle(Umu);
-            double clov = avgClover(Umu);
-            double act = SG.S(Umu);
-            ComplexD polyX = avgPolyakovLoopMu(Umu,0);
-            ComplexD polyY = avgPolyakovLoopMu(Umu,1);
-            ComplexD polyZ = avgPolyakovLoopMu(Umu,2);
-            ComplexD polyT = avgPolyakovLoopMu(Umu,3);
+            GridBase *grid = Umu.Grid();
+
+            std::vector<GaugeLinkField> Udir(Nd, grid);
+            for (int d = 0; d < Nd; d++) {
+                Udir[d] = PeekIndex<LorentzIndex>(Umu, d);
+            }
+
+            std::vector<GaugeLinkField> Fmunu(8, grid);
+            WilsonLoops<GImpl>::FieldStrengthAll(Umu, Udir, Fmunu);
+
+            double Q = WilsonLoops<GImpl>::TopologicalCharge(Fmunu);
+            double plaq = WilsonLoops<GImpl>::avgPlaquette(Udir);
+            double rect = WilsonLoops<GImpl>::avgRectangle(Udir);
+            double clov = avgClover(Umu, Fmunu);
+            double act = SG.S(Umu, Udir);
+            std::array<ComplexD, Nd> poly = avgPolyakovLoopMu(Udir);
 
             result.flowtime.push_back(flowt);
             result.plaquette.push_back(plaq);
@@ -348,10 +354,10 @@ class Evolution {
             result.clover.push_back(clov);
             result.topocharge.push_back(Q);
             result.action.push_back(act);
-            result.polyakovX.push_back(polyX);
-            result.polyakovY.push_back(polyY);
-            result.polyakovZ.push_back(polyZ);
-            result.polyakovT.push_back(polyT);
+            result.polyakovX.push_back(poly[0]);
+            result.polyakovY.push_back(poly[1]);
+            result.polyakovZ.push_back(poly[2]);
+            result.polyakovT.push_back(poly[3]);
         };
 };
 
