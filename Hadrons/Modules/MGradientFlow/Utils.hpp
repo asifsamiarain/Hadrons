@@ -154,7 +154,7 @@ class Evolution {
             scaledUnit = 1.0 / Nc;
             Clov = Zero();
 
-            const int cloverIndex[6] = {6, 1, 7, 3, 4, 5}; // {Fyx, Fzx, Fzy, , Ftx, Fty, Ftz}
+            const int cloverIndex[6] = {6, 1, 7, 3, 4, 5}; // {Fyx, Fzx, Fzy, Ftx, Fty, Ftz}
             for (int k = 0; k < 6; k++) {
                 linkBuf_ = Fmunu[cloverIndex[k]];
                 linkBuf_ -= trace(linkBuf_) * scaledUnit;
